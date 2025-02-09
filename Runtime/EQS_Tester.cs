@@ -8,66 +8,30 @@ namespace LowEndGames.EQS
     [ExecuteInEditMode]
     public class EQS_Tester : MonoBehaviour
     {
-        [SerializeField] private int m_gridSize = 16;
-        [SerializeField] private float m_gridSpacing = 1f;
+        [SerializeField] private EQS_QuerySettings m_settings;
         [SerializeField] private Transform m_target;
-        [SerializeField] private LayerMask m_obstacleMask;
-        [SerializeField] [NavMeshArea] private int m_navMeshAreas;
-        [SerializeField] private EnvironmentQuerySystem.QueryFlags m_flags;
-        [SerializeField] private float m_maxDistance = 10f;
         [SerializeField] private QueryTypes m_queryType;
         [SerializeField] private Gradient m_scoreGradient;
         
-        public enum QueryTypes
-        {
-            NearestCover,
-            ShootingPosition
-        }
-        
         private EnvironmentQuerySystem.SamplePoint[] m_result;
+        private EnvironmentQuerySystem.SamplePoint m_bestResult;
 
         [ContextMenu("Test Query")]
         private void TestQuery()
         {
-            Func<EnvironmentQuerySystem.SamplePoint, float> scoreFunction = m_queryType switch
-            {
-                QueryTypes.NearestCover => ScoreNearestCover,
-                QueryTypes.ShootingPosition => ScoreShootingPosition,
-                _ => throw new ArgumentOutOfRangeException()
-            };
-
             EnvironmentQuerySystem.RunQuery(new EnvironmentQuerySystem.Query()
             {
-                Flags = m_flags,
+                Flags = m_settings.Flags,
                 Origin = transform.position,
-                GridSize = m_gridSize,
-                GridSpacing = m_gridSpacing,
+                GridSize = m_settings.GridSize,
+                GridSpacing = m_settings.GridSpacing,
                 Target = m_target.position,
-                ObstacleMask = m_obstacleMask,
+                ObstacleMask = m_settings.ObstacleMask,
                 Callback = OnQueryComplete,
-                NavMeshAreas = m_navMeshAreas,
-                ScoreFunction = scoreFunction,
+                NavMeshAreas = m_settings.NavMeshAreas,
+                ScoreFunction = m_settings.GetScoreFunction(m_queryType),
+                OverlapSize = m_settings.OverlapCheckSize
             });
-        }
-
-        private float ScoreNearestCover(EnvironmentQuerySystem.SamplePoint samplePoint)
-        {
-            if (!samplePoint.CanSeeTarget)
-            {
-                return 1f - samplePoint.DistanceToOrigin / m_maxDistance;
-            }
-
-            return 0f;
-        }
-
-        private float ScoreShootingPosition(EnvironmentQuerySystem.SamplePoint samplePoint)
-        {
-            if (samplePoint.CanSeeTarget)
-            {
-                return 1f - samplePoint.DistanceToOrigin / m_maxDistance;
-            }
-
-            return 0;
         }
 
         private void OnValidate()
@@ -87,6 +51,24 @@ namespace LowEndGames.EQS
         private void OnQueryComplete(NativeArray<EnvironmentQuerySystem.SamplePoint> result)
         {
             m_result = result.ToArray();
+
+            if (m_result.Length > 0)
+            {
+                Array.Sort(m_result, (a, b) => b.Score.CompareTo(a.Score));
+
+                foreach (var s in m_result)
+                {
+                    if (s.IsValid)
+                    {
+                        m_bestResult = s;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                m_bestResult = default;
+            }
         }
 
         private void OnDrawGizmos()
@@ -94,22 +76,27 @@ namespace LowEndGames.EQS
             if (m_result == null) 
                 return;
             
+            GizmosEx.DrawArrow(m_target.position, m_target.forward, Color.cyan);
+            
+            Gizmos.color = Color.white;
+            Gizmos.DrawLine(transform.position, m_bestResult.Point);
+            
             foreach (var e in m_result)
             {
                 if (!e.IsValid)
                     continue;
-                
-                Gizmos.color = e.Score > 0 
-                    ? m_scoreGradient.Evaluate(e.Score)
-                    : Color.red;
 
                 if (e.Score <= 0)
                 {
-                    Gizmos.color = Color.red.WithA(0.25f);
+                    Gizmos.color = Color.red.WithA(0.1f);
                     Gizmos.DrawWireSphere(e.Point, .3f);
                 }
                 else
                 {
+                    Gizmos.color = e.Score > 0 
+                        ? m_scoreGradient.Evaluate(e.Score)
+                        : Color.red;
+                    
                     Gizmos.DrawSphere(e.Point, .3f); 
                     UnityEditor.Handles.Label(e.Point + Vector3.up, $"{e.Score:F2}");    
                 }
