@@ -1,0 +1,13 @@
+{
+  "name": "com.low-end-games.eqs",
+  "version": "0.0.1",
+  "displayName": "Environment Query System",
+  "description": "UE Style EQS for AI",
+  "author": {
+    "name": "Low End Games",
+    "email": "blll.lowe87@gmail.com",
+    "url": "https://github.com/billowper/leg.eqs"
+  },
+  "type": "library",
+  "hideInEditor": false
+}
