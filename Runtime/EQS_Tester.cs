@@ -21,6 +21,7 @@ namespace LowEndGames.EQS
         {
             EnvironmentQuerySystem.RunQuery(new EnvironmentQuerySystem.Query()
             {
+                Source = gameObject,
                 Flags = m_settings.Flags,
                 Origin = transform.position,
                 GridSize = m_settings.GridSize,

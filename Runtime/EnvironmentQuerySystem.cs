@@ -1,13 +1,45 @@
 ﻿using System;
+using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.AI;
+using UnityEngine.LowLevel;
+using UnityEngine.Profiling;
 
 namespace LowEndGames.EQS
 {
+    public delegate float PointScoreFunction(EnvironmentQuerySystem.Query query,
+        int pointIndex,
+        EnvironmentQuerySystem.SamplePoint samplePoint,
+        NativeArray<EnvironmentQuerySystem.SamplePoint> points);
+    
     public static class EnvironmentQuerySystem
     {
-        private static readonly Collider[] m_overlaps = new Collider[32];
+        public static void Update()
+        {
+            ProcessQueue();
+        }
+        
+        public static void AddQuery(Query query)
+        {
+            m_requestQueue.Enqueue(query);
+        }
+
+        public static void RunQuery(Query query)
+        {
+            Profiler.BeginSample("RunQuery");
+            
+            var totalPoints = query.GridSize * query.GridSize;
+            var results = new NativeArray<SamplePoint>(totalPoints, Allocator.Temp);
+    
+            Execute(query, results);
+            
+            query.Callback(results);
+            
+            results.Dispose();
+            
+            Profiler.EndSample();
+        }
 
         [Flags]
         public enum QueryFlags
@@ -19,16 +51,55 @@ namespace LowEndGames.EQS
             OverlapCheck = 1 << 4,
         }
         
-        public static void RunQuery(Query query)
+        public struct Query
         {
-            var totalPoints = query.GridSize * query.GridSize;
-            var results = new NativeArray<SamplePoint>(totalPoints, Allocator.Temp);
-    
-            Execute(query, results);
-            
-            query.Callback(results);
-            
-            results.Dispose();
+            public GameObject Source;
+            public QueryFlags Flags;
+            public Vector3 Origin;
+            public int GridSize;
+            public float GridSpacing;
+            public Vector3 Target;
+            public LayerMask ObstacleMask;
+            public Action<NativeArray<SamplePoint>> Callback;
+            public int NavMeshAreas;
+            public PointScoreFunction ScoreFunction;
+            public Vector3 OverlapSize;
+        }
+
+        public struct SamplePoint
+        {
+            public bool IsValid;
+            public Vector3 Point;
+            public float DistanceToOrigin;
+            public float DistanceToTarget;
+            public float DistanceToObstacle;
+            public bool CanSeeTarget;
+            public bool InLineOfSight;
+            public bool IsClear;
+            public float Score;
+        }
+        
+        // ------------------------------------------------- private 
+        
+        private static readonly Collider[] m_overlaps = new Collider[32];
+        private static readonly Queue<Query> m_requestQueue = new Queue<Query>();
+        private const int m_maxConcurrentQueries = 5;
+        private static int m_activeRequests = 0;
+
+        private static void ProcessQueue()
+        {
+            while (m_activeRequests < m_maxConcurrentQueries && m_requestQueue.Count > 0)
+            {
+                var request = m_requestQueue.Dequeue();
+                if (!request.Source)
+                {
+                    continue;
+                }
+                Debug.Log($"[EnvironmentQuerySystem]: Processing Query - {request.Source.name}");
+
+                m_activeRequests++;
+                RunQuery(request);
+            }
         }
 
         private static void Execute(Query query, NativeArray<SamplePoint> results)
@@ -36,13 +107,29 @@ namespace LowEndGames.EQS
             var i = 0;
             var max = query.GridSize / 2;
             
+            // sample nodes
+            
             for (int x = -max; x < max; x++)
             {
                 for (int y = -max; y < max; y++)
                 {
                     var point = query.Origin + new Vector3(x * query.GridSpacing, 0, y * query.GridSpacing);
+                    Profiler.BeginSample("CreateSample");
                     results[i] = CreateSample(query, point);
                     i++;
+                    Profiler.EndSample();
+                }
+            }
+
+            // score all valid nodes
+            
+            for (var index = 0; index < results.Length; index++)
+            {
+                var point = results[index];
+                if (point.IsValid)
+                {
+                    point.Score = query.ScoreFunction(query, index, point, results);
+                    results[index] = point;
                 }
             }
         }
@@ -105,38 +192,9 @@ namespace LowEndGames.EQS
                         sample.CanSeeTarget = true;
                     }
                 }
-                
-                sample.Score = query.ScoreFunction(query, sample);
             }
             
             return sample;
-        }
-
-        public struct Query
-        {
-            public QueryFlags Flags;
-            public Vector3 Origin;
-            public int GridSize;
-            public float GridSpacing;
-            public Vector3 Target;
-            public LayerMask ObstacleMask;
-            public Action<NativeArray<SamplePoint>> Callback;
-            public int NavMeshAreas;
-            public Func<Query, SamplePoint, float> ScoreFunction;
-            public Vector3 OverlapSize;
-        }
-
-        public struct SamplePoint
-        {
-            public bool IsValid;
-            public Vector3 Point;
-            public float DistanceToOrigin;
-            public float DistanceToTarget;
-            public float DistanceToObstacle;
-            public bool CanSeeTarget;
-            public bool InLineOfSight;
-            public bool IsClear;
-            public float Score;
         }
     }
 

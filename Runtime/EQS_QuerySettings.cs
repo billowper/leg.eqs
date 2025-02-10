@@ -1,5 +1,6 @@
 ﻿using System;
 using LowEndGames.Utils;
+using Unity.Collections;
 using UnityEngine;
 
 namespace LowEndGames.EQS
@@ -18,7 +19,7 @@ namespace LowEndGames.EQS
         public float MaxDistanceFromCover = 3f;
         public AnimationCurve ResponseCurve = AnimationCurve.EaseInOut(0,0,1,1);
         
-        public Func<EnvironmentQuerySystem.Query, EnvironmentQuerySystem.SamplePoint, float> GetScoreFunction(QueryTypes queryType)
+        public PointScoreFunction GetScoreFunction(QueryTypes queryType)
         {
             return queryType switch
             {
@@ -29,23 +30,37 @@ namespace LowEndGames.EQS
             };
         }
         
-        private float ScoreNearestCover(EnvironmentQuerySystem.Query query, EnvironmentQuerySystem.SamplePoint samplePoint)
+        private float ScoreNearestCover(EnvironmentQuerySystem.Query query, int pointIndex, EnvironmentQuerySystem.SamplePoint samplePoint, NativeArray<EnvironmentQuerySystem.SamplePoint> points)
         {
             // we want a point where the target cannot see us,
             // and then prefer close to an obstacle (e.g. near the pillar, not just in its shadow)
+            
             if (samplePoint is { CanSeeTarget: false, IsClear: true })
             {
                 var inverseDistToOrigin = 1f - Mathf.Clamp01(samplePoint.DistanceToOrigin / MaxDistance) * 2f;
                 var inverseDistFromObstacle = 1f - Mathf.Clamp01(samplePoint.DistanceToObstacle / MaxDistanceFromCover);
-                var combinedScore = Mathf.Clamp01((inverseDistToOrigin + inverseDistFromObstacle) / 2f);
+                var combinedScore = inverseDistToOrigin + inverseDistFromObstacle;
+                
+                // if a neighbouring cell can see the target, we get a fat bonus
 
+                foreach (var n in EQS_Utils.GetNeighborIndices(pointIndex, query.GridSize, query.GridSize))
+                {
+                    if (points[n].CanSeeTarget)
+                    {
+                        combinedScore += 1f;
+                        break;
+                    }
+                }
+
+                combinedScore = Mathf.Clamp01(combinedScore / 3f);
+                
                 return ResponseCurve.Evaluate(combinedScore) * inverseDistFromObstacle;
             }
 
             return 0f;
         }
 
-        private float ScoreShootingPosition(EnvironmentQuerySystem.Query query, EnvironmentQuerySystem.SamplePoint samplePoint)
+        private float ScoreShootingPosition(EnvironmentQuerySystem.Query query, int pointIndex, EnvironmentQuerySystem.SamplePoint samplePoint, NativeArray<EnvironmentQuerySystem.SamplePoint> points)
         {
             if (samplePoint is { CanSeeTarget: true, IsClear: true })
             {
@@ -55,10 +70,11 @@ namespace LowEndGames.EQS
             return 0;
         }
 
-        private float ScoreRetreatPosition(EnvironmentQuerySystem.Query query, EnvironmentQuerySystem.SamplePoint samplePoint)
+        private float ScoreRetreatPosition(EnvironmentQuerySystem.Query query, int pointIndex, EnvironmentQuerySystem.SamplePoint samplePoint, NativeArray<EnvironmentQuerySystem.SamplePoint> points)
         {
             // we want a point where the target cannot see us,
             // and then prefer close to an obstacle (e.g. near the pillar, not just in its shadow)
+            
             if (samplePoint is { CanSeeTarget: false, IsClear: true })
             {
                 var dirToPoint = query.Origin - samplePoint.Point;
