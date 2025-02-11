@@ -17,7 +17,10 @@ namespace LowEndGames.EQS
     {
         public static void Update()
         {
-            ProcessQueue();
+            if (m_requestQueue.TryDequeue(out var request))
+            {
+                RunQuery(request);
+            }
         }
         
         public static void AddQuery(Query query)
@@ -27,6 +30,8 @@ namespace LowEndGames.EQS
 
         public static void RunQuery(Query query)
         {
+            Debug.Log($"[EnvironmentQuerySystem]: RunQuery - {query.Source.name}");
+            
             Profiler.BeginSample("RunQuery");
             
             var totalPoints = query.GridSize * query.GridSize;
@@ -83,24 +88,6 @@ namespace LowEndGames.EQS
         
         private static readonly Collider[] m_overlaps = new Collider[32];
         private static readonly Queue<Query> m_requestQueue = new Queue<Query>();
-        private const int m_maxConcurrentQueries = 5;
-        private static int m_activeRequests = 0;
-
-        private static void ProcessQueue()
-        {
-            while (m_activeRequests < m_maxConcurrentQueries && m_requestQueue.Count > 0)
-            {
-                var request = m_requestQueue.Dequeue();
-                if (!request.Source)
-                {
-                    continue;
-                }
-                Debug.Log($"[EnvironmentQuerySystem]: Processing Query - {request.Source.name}");
-
-                m_activeRequests++;
-                RunQuery(request);
-            }
-        }
 
         private static void Execute(Query query, NativeArray<SamplePoint> results)
         {
