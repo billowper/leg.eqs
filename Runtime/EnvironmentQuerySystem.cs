@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.AI;
-using UnityEngine.LowLevel;
 using UnityEngine.Profiling;
 
 namespace LowEndGames.EQS
@@ -61,6 +60,7 @@ namespace LowEndGames.EQS
             public GameObject Source;
             public QueryFlags Flags;
             public Vector3 Origin;
+            public Vector3 LineOfSightOrigin;
             public int GridSize;
             public float GridSpacing;
             public Vector3 Target;
@@ -74,6 +74,7 @@ namespace LowEndGames.EQS
         public struct SamplePoint
         {
             public bool IsValid;
+            
             public Vector3 Point;
             public float DistanceToOrigin;
             public float DistanceToTarget;
@@ -82,6 +83,17 @@ namespace LowEndGames.EQS
             public bool InLineOfSight;
             public bool IsClear;
             public float Score;
+
+            public override string ToString()
+            {
+                return $"Score :  {Score:F3}\n" +
+                       $"DistToOrigin :  {DistanceToOrigin:F3}\n" +
+                       $"DistToTarget :  {DistanceToTarget:F3}\n" +
+                       $"DistToObstacle :  {DistanceToObstacle:F3}\n" +
+                       $"CanSeeTarget :  {CanSeeTarget}\n" +
+                       $"InLineOfSight :  {InLineOfSight}\n" +
+                       $"IsClear :  {IsClear}";
+            }
         }
         
         // ------------------------------------------------- private 
@@ -128,6 +140,10 @@ namespace LowEndGames.EQS
             var onNavMesh = NavMesh.SamplePosition(point, out var hit, 1.0f, query.NavMeshAreas);
             if (onNavMesh)
             {
+                sample.Point = hit.position;
+                
+                // if we failed an overlap check, early out
+                
                 if (query.Flags.HasFlagFast(QueryFlags.OverlapCheck))
                 {
                     var boxCenter = point + Vector3.up * (query.OverlapSize.y / 2f + 0.01f);
@@ -142,11 +158,9 @@ namespace LowEndGames.EQS
 
                 sample.IsClear = true;
                 sample.IsValid = true;
-                sample.Point = hit.position;
 
                 var losOffset = Vector3.up * .5f;
-
-                var dirToTarget = (query.Target + losOffset) - (point + losOffset);
+                var dirToTarget = query.Target - (point + losOffset);
 
                 if (query.Flags.HasFlagFast(QueryFlags.DistanceToTarget))
                 {
@@ -165,7 +179,7 @@ namespace LowEndGames.EQS
 
                 if (query.Flags.HasFlagFast(QueryFlags.LineOfSightToTarget))
                 {
-                    if (Physics.Raycast(point + losOffset,
+                    if (Physics.Raycast(point.WithY(query.LineOfSightOrigin.y),
                             dirToTarget.normalized,
                             out var obstacleHit,
                             dirToTarget.magnitude,
