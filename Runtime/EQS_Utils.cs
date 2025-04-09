@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using UnityEngine;
 
 namespace LowEndGames.EQS
 {
@@ -23,6 +24,15 @@ namespace LowEndGames.EQS
                     yield return ny * gridWidth + nx;
                 }
             }
+        }
+
+        public static void SnapPositionToWorldGrid(ref Vector3 pos, float snapValue)
+        {
+            var snappedX = Mathf.Round(pos.x / snapValue) * snapValue;
+            var snappedY = Mathf.Round(pos.y / snapValue) * snapValue;
+            var snappedZ = Mathf.Round(pos.z / snapValue) * snapValue;
+
+            pos = new Vector3(snappedX, snappedY, snappedZ);
         }
     }
 }

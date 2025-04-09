@@ -14,6 +14,8 @@ namespace LowEndGames.EQS
     
     public static class EnvironmentQuerySystem
     {
+        public static EQS_GlobalSettings Settings { get; set; }
+        
         public static void Update()
         {
             if (m_requestQueue.TryDequeue(out var request))
@@ -45,30 +47,38 @@ namespace LowEndGames.EQS
             Profiler.EndSample();
         }
 
-        [Flags]
-        public enum QueryFlags
-        {
-            DistanceToTarget = 1 << 0,
-            DistanceToOrigin = 1 << 1,
-            LineOfSightToOrigin = 1 << 2,
-            LineOfSightToTarget = 1 << 3,
-            OverlapCheck = 1 << 4,
-        }
-        
         public struct Query
         {
-            public GameObject Source;
-            public QueryFlags Flags;
-            public Vector3 Origin;
-            public Vector3 LineOfSightOrigin;
-            public int GridSize;
-            public float GridSpacing;
-            public Vector3 Target;
-            public LayerMask ObstacleMask;
-            public Action<NativeArray<SamplePoint>> Callback;
-            public int NavMeshAreas;
-            public PointScoreFunction ScoreFunction;
-            public Vector3 OverlapSize;
+            public readonly GameObject Source;
+            public readonly Vector3 Origin;
+            public readonly Vector3 LineOfSightOrigin;
+            public readonly int GridSize;
+            public readonly float GridSpacing;
+            public readonly Vector3 Target;
+            public readonly Vector3 LineOfSightTarget;
+            public readonly LayerMask ObstacleMask;
+            public readonly Action<NativeArray<SamplePoint>> Callback;
+            public readonly int NavMeshAreas;
+            public readonly PointScoreFunction ScoreFunction;
+            public readonly Vector3 OverlapSize;
+            public readonly float MaxDistanceFromCover;
+
+            public Query(GameObject source, Vector3 origin, Vector3 lineOfSightOrigin, int gridSize, float gridSpacing, Vector3 target, Vector3 lineOfSightTarget, LayerMask obstacleMask, Action<NativeArray<SamplePoint>> callback, int navMeshAreas, PointScoreFunction scoreFunction, Vector3 overlapSize, float maxDistanceFromCover)
+            {
+                Source = source;
+                Origin = origin;
+                LineOfSightOrigin = lineOfSightOrigin;
+                GridSize = gridSize;
+                GridSpacing = gridSpacing;
+                Target = target;
+                LineOfSightTarget = lineOfSightTarget;
+                ObstacleMask = obstacleMask;
+                Callback = callback;
+                NavMeshAreas = navMeshAreas;
+                ScoreFunction = scoreFunction;
+                OverlapSize = overlapSize;
+                MaxDistanceFromCover = maxDistanceFromCover;
+            }
         }
 
         public struct SamplePoint
@@ -79,9 +89,10 @@ namespace LowEndGames.EQS
             public float DistanceToOrigin;
             public float DistanceToTarget;
             public float DistanceToObstacle;
-            public bool CanSeeTarget;
             public bool InLineOfSight;
             public bool IsClear;
+            public bool CanSeeTarget;
+            public CoverTypes CoverType;
             public float Score;
 
             public override string ToString()
@@ -90,9 +101,10 @@ namespace LowEndGames.EQS
                        $"DistToOrigin :  {DistanceToOrigin:F3}\n" +
                        $"DistToTarget :  {DistanceToTarget:F3}\n" +
                        $"DistToObstacle :  {DistanceToObstacle:F3}\n" +
-                       $"CanSeeTarget :  {CanSeeTarget}\n" +
                        $"InLineOfSight :  {InLineOfSight}\n" +
-                       $"IsClear :  {IsClear}";
+                       $"IsClear :  {IsClear}\n" +
+                       $"CanSeeTarget :  {CanSeeTarget}\n" +
+                       $"CoverType :  {CoverType}";
             }
         }
         
@@ -106,13 +118,19 @@ namespace LowEndGames.EQS
             var i = 0;
             var max = query.GridSize / 2;
             
+            // snap to world grid 
+
+            var origin = query.Origin;
+            
+            EQS_Utils.SnapPositionToWorldGrid(ref origin, query.GridSpacing);
+            
             // sample nodes
             
             for (int x = -max; x < max; x++)
             {
                 for (int y = -max; y < max; y++)
                 {
-                    var point = query.Origin + new Vector3(x * query.GridSpacing, 0, y * query.GridSpacing);
+                    var point = origin + new Vector3(x * query.GridSpacing, 0, y * query.GridSpacing);
                     Profiler.BeginSample("CreateSample");
                     results[i] = CreateSample(query, point);
                     i++;
@@ -135,54 +153,45 @@ namespace LowEndGames.EQS
 
         private static SamplePoint CreateSample(Query query, Vector3 point)
         {
-            var sample = new SamplePoint();
+            var sample = new SamplePoint()
+            {
+                Point = point
+            };
             
-            var onNavMesh = NavMesh.SamplePosition(point, out var hit, 1.0f, query.NavMeshAreas);
+            var onNavMesh = NavMesh.SamplePosition(point, out var hit, Settings.NavMeshSampleRadius, query.NavMeshAreas);
             if (onNavMesh)
             {
                 sample.Point = hit.position;
                 
                 // if we failed an overlap check, early out
                 
-                if (query.Flags.HasFlagFast(QueryFlags.OverlapCheck))
-                {
-                    var boxCenter = point + Vector3.up * (query.OverlapSize.y / 2f + 0.01f);
-                    var boxSize = query.OverlapSize;
+                var boxCenter = sample.Point + Vector3.up * (query.OverlapSize.y / 2f + 0.01f);
+                var boxSize = query.OverlapSize;
 
-                    var overlapHits = Physics.OverlapBoxNonAlloc(boxCenter, boxSize * .5f, m_overlaps, Quaternion.identity, Physics.AllLayers, QueryTriggerInteraction.Ignore);
-                    if (overlapHits > 0)
-                    {
-                        return sample;
-                    }
+                var overlapHits = Physics.OverlapBoxNonAlloc(boxCenter, boxSize * .5f, m_overlaps, Quaternion.identity, Physics.AllLayers, QueryTriggerInteraction.Ignore);
+                if (overlapHits > 0)
+                {
+                    return sample;
                 }
 
                 sample.IsClear = true;
                 sample.IsValid = true;
 
-                var losOffset = Vector3.up * .5f;
-                var dirToTarget = query.Target - (point + losOffset);
+                var losOffset = Vector3.up * .1f;
 
-                if (query.Flags.HasFlagFast(QueryFlags.DistanceToTarget))
+                sample.DistanceToTarget = (query.Target - sample.Point).magnitude;
+                sample.DistanceToOrigin = Vector3.Distance(sample.Point, query.Origin);
+                sample.InLineOfSight = !Physics.Linecast(sample.Point + losOffset, query.Origin + losOffset, query.ObstacleMask);
+                
+                // ground-level obstacle distance
                 {
-                    sample.DistanceToTarget = dirToTarget.magnitude;
-                }
-
-                if (query.Flags.HasFlagFast(QueryFlags.DistanceToOrigin))
-                {
-                    sample.DistanceToOrigin = Vector3.Distance(point, query.Origin);
-                }
-
-                if (query.Flags.HasFlagFast(QueryFlags.LineOfSightToOrigin))
-                {
-                    sample.InLineOfSight = !Physics.Linecast(point, query.Origin, query.ObstacleMask);
-                }
-
-                if (query.Flags.HasFlagFast(QueryFlags.LineOfSightToTarget))
-                {
-                    if (Physics.Raycast(point.WithY(query.LineOfSightOrigin.y),
-                            dirToTarget.normalized,
+                    var obsCheckOrigin = sample.Point + losOffset;
+                    var losDir = (query.Target + losOffset) - obsCheckOrigin;
+                    
+                    if (Physics.Raycast(obsCheckOrigin,
+                            losDir.normalized,
                             out var obstacleHit,
-                            dirToTarget.magnitude,
+                            losDir.magnitude,
                             query.ObstacleMask,
                             QueryTriggerInteraction.Ignore))
                     {
@@ -190,8 +199,33 @@ namespace LowEndGames.EQS
                     }
                     else
                     {
+                        sample.DistanceToObstacle = Mathf.Infinity;
+                    }
+                }
+                
+                // eye-level line of sight
+                {
+                    var losOrigin = sample.Point.WithY(query.LineOfSightOrigin.y);
+                    var losDir = query.LineOfSightTarget - losOrigin;
+
+                    if (!Physics.Raycast(losOrigin,
+                            losDir.normalized,
+                            out _,
+                            losDir.magnitude,
+                            query.ObstacleMask,
+                            QueryTriggerInteraction.Ignore))
+                    {
                         sample.CanSeeTarget = true;
                     }
+                }
+
+                if (sample.DistanceToObstacle <= query.MaxDistanceFromCover)
+                {
+                    sample.CoverType = sample.CanSeeTarget ? CoverTypes.Half : CoverTypes.Full;
+                }
+                else
+                {
+                    sample.CoverType = CoverTypes.None;
                 }
             }
             
@@ -199,11 +233,10 @@ namespace LowEndGames.EQS
         }
     }
 
-    public static class QueryFlagsExtensions
+    public enum CoverTypes
     {
-        public static bool HasFlagFast(this EnvironmentQuerySystem.QueryFlags value, EnvironmentQuerySystem.QueryFlags flag)
-        {
-            return (value & flag) != 0;
-        }
+        None,
+        Half,
+        Full
     }
 }

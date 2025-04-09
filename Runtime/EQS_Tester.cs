@@ -10,9 +10,11 @@ namespace LowEndGames.EQS
     [ExecuteInEditMode]
     public class EQS_Tester : MonoBehaviour
     {
-        [SerializeField] private EQS_QuerySettings m_settings;
+        [SerializeField] private EQS_GlobalSettings m_settings;
+        [SerializeField] private EQS_QueryType m_queryType;
+        [SerializeField] private Transform m_head;
         [SerializeField] private Transform m_target;
-        [SerializeField] private QueryTypes m_queryType;
+        [SerializeField] private Transform m_targetHead;
         [SerializeField] private Gradient m_scoreGradient;
         [SerializeField] private float m_pointSize = .15f;
         [SerializeField] private float m_losArrowLength = 1f;
@@ -26,21 +28,21 @@ namespace LowEndGames.EQS
         [ContextMenu("Test Query")]
         private void TestQuery()
         {
-            m_query = new EnvironmentQuerySystem.Query()
-            {
-                Source = gameObject,
-                Flags = m_settings.Flags,
-                Origin = transform.position,
-                LineOfSightOrigin = transform.position + Vector3.up,
-                GridSize = m_settings.GridSize,
-                GridSpacing = m_settings.GridSpacing,
-                Target = m_target.position + Vector3.up,
-                ObstacleMask = m_settings.ObstacleMask,
-                Callback = OnQueryComplete,
-                NavMeshAreas = m_settings.NavMeshAreas,
-                ScoreFunction = m_settings.GetScoreFunction(m_queryType),
-                OverlapSize = m_settings.OverlapCheckSize
-            };
+            EnvironmentQuerySystem.Settings = m_settings;
+            
+            m_query = new EnvironmentQuerySystem.Query(gameObject,
+                transform.position,
+                m_head.position,
+                m_queryType.GridSize,
+                m_queryType.GridSpacing,
+                m_target.position,
+                m_targetHead.position,
+                m_queryType.ObstacleMask,
+                OnQueryComplete,
+                m_queryType.NavMeshAreas,
+                m_queryType.Score,
+                m_queryType.OverlapCheckSize,
+                m_queryType.MaxDistanceFromCover);
             
             EnvironmentQuerySystem.RunQuery(m_query);
         }
@@ -82,9 +84,8 @@ namespace LowEndGames.EQS
                 m_bestResult = default;
             }
         }
-        
 
-        private void OnDrawGizmos()
+        private void OnDrawGizmosSelected()
         {
             if (m_result == null) 
                 return;
@@ -114,10 +115,13 @@ namespace LowEndGames.EQS
             foreach (var e in m_result)
             {
                 if (!e.IsValid)
+                {
+                    Gizmos.color = Color.gray.WithA(0.1f);
+                    Gizmos.DrawWireSphere(e.Point, m_pointSize);
                     continue;
-                
-                var losOffset = Vector3.up * .5f;
-                var dirToTarget = m_query.Target - (e.Point + losOffset);
+                }
+
+                var dirToTarget = (m_query.Target - e.Point);
 
                 if (e.Score <= 0)
                 {
@@ -140,26 +144,56 @@ namespace LowEndGames.EQS
                 
                 if (Vector3.Distance(hit.point, e.Point) < m_gizmoRadius)
                 {
-                    var origin = e.Point.WithY(m_query.LineOfSightOrigin.y);
+                    var losOffset = Vector3.up * .1f;
 
-                    if (Physics.Raycast(origin,
-                            dirToTarget.normalized,
-                            out var obstacleHit,
-                            dirToTarget.magnitude,
-                            m_query.ObstacleMask,
-                            QueryTriggerInteraction.Ignore))
+                    // ground-level obstacle distance
                     {
-                        Gizmos.color = Color.red;
-                        Gizmos.DrawSphere(obstacleHit.point, .1f);
-                    }
-                    else
-                    {
+                        var obsCheckOrigin = e.Point + losOffset;
+                        var losDir = (m_query.Target + losOffset) - obsCheckOrigin;
                         
-                        Gizmos.color = Color.green;
+                        Gizmos.DrawRay(obsCheckOrigin, losDir);
+                    
+                        if (Physics.Raycast(obsCheckOrigin,
+                                losDir.normalized,
+                                out var obstacleHit,
+                                losDir.magnitude,
+                                m_query.ObstacleMask,
+                                QueryTriggerInteraction.Ignore))
+                        {
+                            Gizmos.color = Color.red;
+                            Gizmos.DrawSphere(obstacleHit.point, .1f);
+                        }
+
+                        else
+                        {
+                            Gizmos.color = Color.green;
+                        }
                     }
-                    
-                    Gizmos.DrawRay(origin, dirToTarget);
-                    
+                
+                    // eye-level line of sight
+                    {
+                        var losOrigin = e.Point.WithY(m_query.LineOfSightOrigin.y);
+                        var losDir = m_query.LineOfSightTarget - losOrigin;
+
+                        Gizmos.DrawRay(losOrigin, losDir);
+                        
+                        if (Physics.Raycast(losOrigin,
+                                losDir.normalized,
+                                out var obstacleHit,
+                                losDir.magnitude,
+                                m_query.ObstacleMask,
+                                QueryTriggerInteraction.Ignore))
+                        {
+                            Gizmos.color = Color.red;
+                            Gizmos.DrawSphere(obstacleHit.point, .1f);
+                        }
+
+                        else
+                        {
+                            Gizmos.color = Color.green;
+                        }
+                    }
+
                     Handles.Label(e.Point + Vector3.up, $"{e}");
                 }
             }
